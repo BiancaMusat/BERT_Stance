@@ -76,7 +76,9 @@ def get_model(transformer_model, input_size, output_units):
 
 	# Compiling the model
 	lr = 1e-3
-	opt = Adam(lr=lr, decay=lr/50)
+	lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=lr, decay_steps=10000, decay_rate=lr/50)
+	opt = tf.keras.optimizers.Adam(learning_rate=lr_schedule)
+	# opt = Adam(lr=lr, decay=lr/50)
 	model.compile(
 	    optimizer=opt,
 	    loss='categorical_crossentropy',
