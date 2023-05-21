@@ -37,7 +37,8 @@ from sklearn.model_selection import train_test_split
 from sklearn import metrics
 from sklearn.metrics import classification_report
 from transformers import BertTokenizer
-from keras.preprocessing.sequence import pad_sequences
+# from keras.preprocessing.sequence import pad_sequences
+from keras.utils import pad_sequences
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 from transformers import BertForSequenceClassification, AdamW, BertConfig
 from transformers import get_linear_schedule_with_warmup
@@ -46,21 +47,10 @@ from transformers import get_linear_schedule_with_warmup
 ################ Dataset Loading ##############
 ###############################################
 
-def get_data(train_df, test_df):
-	X1, X2, Y_train = train_df['premise'], train_df['text'], train_df['stance']
+def get_data(train_df, val_df, test_df):
+	x1_train, x2_train, y_train = train_df['premise'], train_df['text'], train_df['stance']
 	x1_test, x2_test, y_test = test_df['premise'], test_df['text'], test_df['stance']
-
-	VALIDATION_RATIO = 0.1
-	RANDOM_STATE = 9527
-	x1_train, x1_val, \
-	x2_train, x2_val, \
-	y_train, y_val = \
-	    train_test_split(
-	        X1, X2,
-	        Y_train,
-	        test_size=VALIDATION_RATIO, 
-	        random_state=RANDOM_STATE
-	)
+	x1_val, x2_val, y_val = val_df['premise'], val_df['text'], val_df['stance']
 
 	# Converting everything to list
 	x1_train = x1_train.tolist()
@@ -121,8 +111,8 @@ def tokenize(model_name, premise_data, hypothesis_data, tokenizer, MAX_LEN):
 
 ################ Data Loader ####################
 ###############################################
-def get_data_loader(batch_size, inputs, masks, token_ids, labels):
-	data = TensorDataset(inputs, masks, token_ids, labels)
+def get_data_loader(batch_size, inputs, masks, token_ids, labels, indexes):
+	data = TensorDataset(inputs, masks, token_ids, labels, indexes)
 	sampler = RandomSampler(data)
 	dataloader = DataLoader(data, sampler=sampler, batch_size=batch_size)
 	return data, sampler, dataloader
@@ -132,13 +122,13 @@ def get_data_loader(batch_size, inputs, masks, token_ids, labels):
 ################ Transformer Model ####################
 ###############################################
 def get_transformer_model(modelname):
-	if modelname == "bert-base-uncased":
+	if modelname == "digitalepidemiologylab/covid-twitter-bert-v2":
 		# Later have to return model also
-		tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True)
+		tokenizer = BertTokenizer.from_pretrained('digitalepidemiologylab/covid-twitter-bert-v2', do_lower_case=True)
 		# Load BertForSequenceClassification, the pretrained BERT model with a single 
 		# linear classification layer on top. 
 		model = BertForSequenceClassification.from_pretrained(
-		    "bert-base-uncased", # Use the 12-layer BERT model, with an uncased vocab.
+		    "digitalepidemiologylab/covid-twitter-bert-v2", # Use the 12-layer BERT model, with an uncased vocab.
 		    num_labels = 3, # The number of output labels--3 for covid-stance classification.
 		                    # You can increase this for multi-class tasks.   
 		    output_attentions = False, # Whether the model returns attentions weights.
@@ -204,7 +194,9 @@ def train(epochs, model, train_dataloader, validation_dataloader, optimizer, sch
 
 	# Store the average loss after each epoch so we can plot them.
 	loss_values = []
-
+	# print("-------------------------------------------")
+	# print(train_dataloader.indices)
+	# print("-------------------------------------------")
 	# For each epoch...
 	for epoch_i in range(0, epochs):
 	    
@@ -254,6 +246,7 @@ def train(epochs, model, train_dataloader, validation_dataloader, optimizer, sch
 	        b_input_mask = batch[1].to(device)
 	        b_input_tokens = batch[2].to(device)
 	        b_labels = batch[3].to(device)
+	        b_indexes = batch[4]
 
 	        # Always clear any previously calculated gradients before performing a
 	        # backward pass. PyTorch doesn't do this automatically because 
@@ -274,7 +267,14 @@ def train(epochs, model, train_dataloader, validation_dataloader, optimizer, sch
 	        # The call to `model` always returns a tuple, so we need to pull the 
 	        # loss value out of the tuple.
 	        loss = outputs[0]
-
+		
+	        with open("logits.txt", "a") as f:
+	            f.write(str(epoch_i) + '\n')
+	            f.write(str(step) + '\n')
+	            f.write(str(list(b_indexes)).replace("\n", "") + '\n')
+	            f.write(str(list(b_labels)).replace("\n", "") + '\n')
+	            f.write(str(list(outputs[1])).replace("\n", "") + '\n')
+		
 	        # Accumulate the training loss over all of the batches so that we can
 	        # calculate the average loss at the end. `loss` is a Tensor containing a
 	        # single value; the `.item()` function just returns the Python value 
@@ -332,8 +332,8 @@ def train(epochs, model, train_dataloader, validation_dataloader, optimizer, sch
 	        batch = tuple(t.to(device) for t in batch)
 	        
 	        # Unpack the inputs from our dataloader
-	        b_input_ids, b_input_mask, b_input_tokens, b_labels = batch
-	        
+	        b_input_ids, b_input_mask, b_input_tokens, b_labels, b_indexes = batch
+
 	        # Telling the model not to compute or store gradients, saving memory and
 	        # speeding up validation
 	        with torch.no_grad():        
@@ -395,7 +395,7 @@ def evaluate(prediction_dataloader, model):
 	  batch = tuple(t.to(device) for t in batch)
 	  
 	  # Unpack the inputs from our dataloader
-	  b_input_ids, b_input_mask, b_input_tokens, b_labels = batch
+	  b_input_ids, b_input_mask, b_input_tokens, b_labels, b_indexes = batch
 	  
 	  # Telling the model not to compute or store gradients, saving memory and 
 	  # speeding up prediction
@@ -422,7 +422,7 @@ def evaluate(prediction_dataloader, model):
 	# Code for result display
 	print('CS classification accuracy is')
 	print(metrics.accuracy_score(true_labels, predictions)*100)
-	print(classification_report(true_labels, predictions, target_names = ['neutral', 'against', 'for']))
+	print(classification_report(true_labels, predictions, target_names = ['neutral', 'for', 'against']))
 
 ################ Main Function ####################
 ###################################################
@@ -439,11 +439,14 @@ def main():
 	test_df = pd.read_csv('datasets/cstance_test.csv')
 	print(test_df.columns)
 
-	(x1_train, x2_train, y_train), (x1_val, x2_val, y_val), (x1_test, x2_test, y_test) = get_data(train_df, test_df)
+	val_df = pd.read_csv('datasets/cstance_val.csv')
+	print(val_df.columns)
+
+	(x1_train, x2_train, y_train), (x1_val, x2_val, y_val), (x1_test, x2_test, y_test) = get_data(train_df, val_df, test_df)
 
 	# Geting the Transformer Tokenized Output
 	MAX_LEN=100
-	model_name = 'bert-base-uncased'
+	model_name = 'digitalepidemiologylab/covid-twitter-bert-v2'
 	batch_size = 32
 	epochs = 4
 	tokenizer, model = get_transformer_model(model_name)
@@ -457,15 +460,19 @@ def main():
 	val_labels = torch.tensor(y_val, dtype=torch.long, device =device)
 	test_labels = torch.tensor(y_test, dtype=torch.long, device =device)
 
+	train_indexes = torch.tensor(range(len(y_train)), dtype=torch.long, device =device)
+	val_indexes = torch.tensor(range(len(y_val)), dtype=torch.long, device =device)
+	test_indexes = torch.tensor(range(len(y_test)), dtype=torch.long, device =device)
+
 	# Printing the shape of these tensors
 	print('Printing the shape of the final tensors')
 	print('Train input', train_inputs.shape, 'Train Masks', train_masks.shape, 'Train Labels', train_labels.shape)
 	print('Val input', val_inputs.shape, 'Val Masks', val_inputs.shape, 'Val Labels', val_inputs.shape)
 	print('Test input', test_inputs.shape, 'Test Masks', test_inputs.shape, 'Test Labels', test_inputs.shape)
 	# Getting the dataloaders
-	train_data, train_sampler, train_dataloader = get_data_loader(batch_size, train_inputs, train_masks, train_token_ids, train_labels)
-	val_data, val_sampler, val_dataloader = get_data_loader(batch_size, val_inputs, val_masks, val_token_ids, val_labels)
-	test_data, test_sampler, test_dataloader = get_data_loader(batch_size, test_inputs, test_masks, test_token_ids, test_labels)
+	train_data, train_sampler, train_dataloader = get_data_loader(batch_size, train_inputs, train_masks, train_token_ids, train_labels, train_indexes)
+	val_data, val_sampler, val_dataloader = get_data_loader(batch_size, val_inputs, val_masks, val_token_ids, val_labels, val_indexes)
+	test_data, test_sampler, test_dataloader = get_data_loader(batch_size, test_inputs, test_masks, test_token_ids, test_labels, test_indexes)
 	print("Successfull in data prepration!")
 
 	# Getting optimzer and scheduler
@@ -480,6 +487,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
 
