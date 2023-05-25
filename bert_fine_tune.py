@@ -95,7 +95,7 @@ def tokenize(model_name, premise_data, hypothesis_data, tokenizer, MAX_LEN):
 		for i in seq:
 			if condition == 'sent1':
 				type_id.append(0)
-				if i == 102:
+				if i == 130:
 					condition = 'sent2'
 			elif condition == 'sent2':
 				type_id.append(1)
@@ -445,7 +445,7 @@ def main():
 	(x1_train, x2_train, y_train), (x1_val, x2_val, y_val), (x1_test, x2_test, y_test) = get_data(train_df, val_df, test_df)
 
 	# Geting the Transformer Tokenized Output
-	MAX_LEN=100
+	MAX_LEN=128
 	model_name = 'digitalepidemiologylab/covid-twitter-bert-v2'
 	batch_size = 32
 	epochs = 4
